@@ -10,13 +10,16 @@ const TelegramBot = require('node-telegram-bot-api');
 // --- CONFIGURATION ---
 const CONFIG_FILE = path.join(__dirname, 'data.json');
 let TOKEN = '';
+let CHAT_ID = '';
 
 try {
     const data = fs.readFileSync(CONFIG_FILE, 'utf8');
     const config = JSON.parse(data);
     if (!config.telegram_token) throw new Error("telegram_token missing");
+    if (!config.telegram_chat_id) throw new Error("telegram_chat_id missing");
     TOKEN = config.telegram_token;
-    console.log("[CONFIG] Token loaded successfully.");
+    CHAT_ID = config.telegram_chat_id;
+    console.log("[CONFIG] Token and chat_id loaded successfully.");
 } catch (err) {
     console.error("[CRITICAL] Failed to load data.json:", err.message);
     process.exit(1);
@@ -51,22 +54,28 @@ let connectedClients = {};
 
 io.on('connection', (socket) => {
     console.log("Client connected:", socket.id);
-    
+
     socket.on('register', (data) => {
         if (!data.clientId) return;
         connectedClients[data.clientId] = socket;
         console.log("Registered client:", data.clientId);
+
+        // --- Telegram Alert on Phone Connection ---
+        bot.sendMessage(CHAT_ID, `📱 الهاتف ${data.clientId} متصل الآن.`);
     });
-    
+
     socket.on('response', (data) => {
         console.log(`[RESPONSE] ${data.clientId}:`, data);
     });
-    
+
     socket.on('disconnect', () => {
         for (const id in connectedClients) {
             if (connectedClients[id] === socket) {
                 delete connectedClients[id];
                 console.log("Client disconnected:", id);
+
+                // --- Telegram Alert on Phone Disconnect ---
+                bot.sendMessage(CHAT_ID, `⚠️ الهاتف ${id} تم فصله.`);
             }
         }
     });
@@ -88,7 +97,7 @@ console.log("Telegram Bot Initialized.");
 function sendCommandToClient(clientId, command, argument) {
     const socket = connectedClients[clientId];
     if (!socket) return `[ERROR] Client ${clientId} not connected`;
-    
+
     const payload = argument ? `${command}|${argument}` : command;
     socket.emit('command', { command, argument });
     return `[DISPATCH] Sent to ${clientId}: ${payload}`;
@@ -97,17 +106,17 @@ function sendCommandToClient(clientId, command, argument) {
 function handleTelegramCommand(commandKey, msg, argument) {
     const commandData = COMMAND_MAP[commandKey];
     if (!commandData) return bot.sendMessage(msg.chat.id, "Command not recognized.");
-    
+
     const clientId = "phone_1"; // مثال ثابت، يمكن تغييره حسب النظام
     let result;
-    
+
     if (commandData.type === "simple") {
         result = sendCommandToClient(clientId, commandData.instruction);
     } else if (commandData.type === "arg") {
         const arg = argument || "N/A";
         result = sendCommandToClient(clientId, commandData.instruction_prefix + arg);
     }
-    
+
     bot.sendMessage(msg.chat.id, result);
 }
 
